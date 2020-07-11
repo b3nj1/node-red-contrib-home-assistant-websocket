@@ -4,6 +4,16 @@ module.exports = {
     parserOptions: { sourceType: 'module' },
     env: { browser: true, mocha: true },
     rules: {
-        'prettier/prettier': ['error', { tabWidth: 4, singleQuote: true }]
-    }
+        'prettier/prettier': ['error'],
+        'sort-requires/sort-requires': 2,
+    },
+    globals: {
+        RED: 'readonly',
+        $: 'readonly',
+        exposeNode: 'readonly',
+        haServer: 'readonly',
+        ifState: 'readonly',
+        nodeVersion: 'readonly',
+    },
+    plugins: ['sort-requires'],
 };

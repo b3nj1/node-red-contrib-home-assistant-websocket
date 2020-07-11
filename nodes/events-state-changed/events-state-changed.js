@@ -1,146 +1,176 @@
 /* eslint-disable camelcase */
-const EventsNode = require('../../lib/events-node');
+const cloneDeep = require('lodash.clonedeep');
+const EventsHaNode = require('../../lib/events-ha-node');
+const { shouldIncludeEvent } = require('../../lib/utils');
 
-module.exports = function(RED) {
+module.exports = function (RED) {
     const nodeOptions = {
         config: {
-            entityidfilter: nodeDef => {
-                if (!nodeDef.entityidfilter) return undefined;
-
-                if (nodeDef.entityidfiltertype === 'substring')
-                    return nodeDef.entityidfilter.split(',').map(f => f.trim());
-                if (nodeDef.entityidfiltertype === 'regex')
-                    return new RegExp(nodeDef.entityidfilter);
-                return nodeDef.entityidfilter;
-            },
+            entityidfilter: {},
             entityidfiltertype: {},
-            haltIfState: nodeDef =>
+            haltIfState: (nodeDef) =>
                 nodeDef.haltifstate ? nodeDef.haltifstate.trim() : null,
-            outputinitially: {}
-        }
+            halt_if_type: (nodeDef) => nodeDef.halt_if_type || 'str',
+            halt_if_compare: (nodeDef) => nodeDef.halt_if_compare || 'is',
+            outputinitially: {},
+            state_type: (nodeDef) => nodeDef.state_type || 'str',
+            output_only_on_state_change: {},
+        },
     };
 
-    class ServerStateChangedNode extends EventsNode {
+    class ServerStateChangedNode extends EventsHaNode {
         constructor(nodeDefinition) {
             super(nodeDefinition, RED, nodeOptions);
-            this.addEventClientListener({
-                event: 'ha_events:state_changed',
-                handler: this.onHaEventsStateChanged.bind(this)
-            });
+            let eventTopic = 'ha_events:state_changed';
+
+            if (this.nodeConfig.entityidfiltertype === 'exact') {
+                eventTopic = this.eventTopic = `ha_events:state_changed:${this.nodeConfig.entityidfilter}`;
+            }
+
+            this.addEventClientListener(
+                eventTopic,
+                this.onHaEventsStateChanged.bind(this)
+            );
 
             if (this.nodeConfig.outputinitially) {
-                this.addEventClientListener({
-                    event: 'ha_events:states_loaded',
-                    handler: this.onDeploy.bind(this)
-                });
+                // Here for when the node is deploy without the server config being deployed
+                if (this.isConnected) {
+                    this.onDeploy();
+                } else {
+                    this.addEventClientListener(
+                        'ha_client:initial_connection_ready',
+                        this.onStatesLoaded.bind(this)
+                    );
+                }
             }
         }
 
-        onHaEventsStateChanged(evt) {
-            try {
-                const { entity_id, event } = evt;
-
-                if (!event.new_state) {
-                    return null;
-                }
-
-                const shouldHaltIfState = this.shouldHaltIfState(event);
-                const shouldIncludeEvent = this.shouldIncludeEvent(entity_id);
-
-                if (shouldIncludeEvent) {
-                    if (shouldHaltIfState) {
-                        this.debug(
-                            'flow halted due to "halt if state" setting'
-                        );
-                        this.status({
-                            fill: 'red',
-                            shape: 'ring',
-                            text: `${
-                                event.new_state.state
-                            } at: ${this.getPrettyDate()}`
-                        });
-
-                        return null;
-                    }
-
-                    const msg = {
-                        topic: entity_id,
-                        payload: event.new_state.state,
-                        data: event
-                    };
-
-                    this.status({
-                        fill: 'green',
-                        shape: 'dot',
-                        text: `${
-                            event.new_state.state
-                        } at: ${this.getPrettyDate()}`
-                    });
-                    event.old_state
-                        ? this.debug(
-                              `Incoming state event: entity_id: ${
-                                  event.entity_id
-                              }, new_state: ${
-                                  event.new_state.state
-                              }, old_state: ${event.old_state.state}`
-                          )
-                        : this.debug(
-                              `Incoming state event: entity_id: ${
-                                  event.entity_id
-                              }, new_state: ${event.new_state.state}`
-                          );
-
-                    return this.send(msg);
-                }
-                return null;
-            } catch (e) {
-                this.error(e);
+        async onHaEventsStateChanged(evt, runAll) {
+            const config = this.nodeConfig;
+            if (this.isEnabled === false) {
+                return;
             }
+            const { entity_id, event } = cloneDeep(evt);
+
+            if (!event.new_state) {
+                return;
+            }
+
+            event.new_state.timeSinceChangedMs =
+                Date.now() - new Date(event.new_state.last_changed).getTime();
+
+            // Convert and save original state if needed
+            if (config.state_type !== 'str') {
+                if (event.old_state) {
+                    event.old_state.original_state = event.old_state.state;
+                    event.old_state.state = this.getCastValue(
+                        config.state_type,
+                        event.old_state.state
+                    );
+                }
+                event.new_state.original_state = event.new_state.state;
+                event.new_state.state = this.getCastValue(
+                    config.state_type,
+                    event.new_state.state
+                );
+            }
+
+            if (
+                !shouldIncludeEvent(
+                    entity_id,
+                    this.nodeConfig.entityidfilter,
+                    this.nodeConfig.entityidfiltertype
+                )
+            ) {
+                return;
+            }
+
+            if (
+                runAll === undefined &&
+                config.output_only_on_state_change === true &&
+                event.old_state &&
+                event.old_state.state === event.new_state.state
+            ) {
+                return;
+            }
+
+            // Check if 'if state' is true
+            const isIfState = await this.getComparatorResult(
+                config.halt_if_compare,
+                config.haltIfState,
+                event.new_state.state,
+                config.halt_if_type,
+                {
+                    entity: event.new_state,
+                    prevEntity: event.old_state,
+                }
+            ).catch((e) => {
+                this.setStatusFailed('Error');
+                this.node.error(e.message, {});
+            });
+
+            const msg = {
+                topic: entity_id,
+                payload: event.new_state.state,
+                data: event,
+            };
+
+            const statusMessage = `${event.new_state.state}${
+                evt.event_type === 'triggered' ? ` (triggered)` : ''
+            }`;
+
+            // Handle version 0 'halt if' outputs. The output were reversed true
+            // was sent to the second output and false was the first output
+            if (config.version < 1) {
+                if (config.haltIfState && isIfState) {
+                    this.setStatusFailed(statusMessage);
+                    this.send([null, msg]);
+                    return;
+                }
+                this.setStatusSuccess(statusMessage);
+                this.send([msg, null]);
+                return;
+            }
+
+            if (config.haltIfState && !isIfState) {
+                this.setStatusFailed(statusMessage);
+                this.send([null, msg]);
+                return;
+            }
+
+            this.setStatusSuccess(statusMessage);
+            this.send([msg, null]);
+        }
+
+        getNodeEntityId() {
+            return (
+                this.nodeConfig.entityidfiltertype === 'exact' &&
+                this.nodeConfig.entityidfilter
+            );
+        }
+
+        triggerNode(eventMessage) {
+            this.onHaEventsStateChanged(eventMessage, false);
         }
 
         async onDeploy() {
             const entities = await this.nodeConfig.server.homeAssistant.getStates();
+            this.onStatesLoaded(entities);
+        }
 
-            for (let entityId in entities) {
-                let eventMessage = {
+        onStatesLoaded(entities) {
+            for (const entityId in entities) {
+                const eventMessage = {
                     event_type: 'state_changed',
                     entity_id: entityId,
                     event: {
                         entity_id: entityId,
                         old_state: entities[entityId],
-                        new_state: entities[entityId]
-                    }
+                        new_state: entities[entityId],
+                    },
                 };
 
-                this.onHaEventsStateChanged(eventMessage);
-            }
-        }
-
-        shouldHaltIfState(haEvent, haltIfState) {
-            if (!this.nodeConfig.haltIfState) return false;
-            const shouldHalt =
-                this.nodeConfig.haltIfState === haEvent.new_state.state;
-            return shouldHalt;
-        }
-
-        shouldIncludeEvent(entityId) {
-            if (!this.nodeConfig.entityidfilter) return true;
-            const filter = this.nodeConfig.entityidfilter;
-            const type = this.nodeConfig.entityidfiltertype;
-
-            if (type === 'exact') {
-                return filter === entityId;
-            }
-
-            if (type === 'substring') {
-                const found = this.nodeConfig.entityidfilter.filter(
-                    filterStr => entityId.indexOf(filterStr) >= 0
-                );
-                return found.length > 0;
-            }
-
-            if (type === 'regex') {
-                return filter.test(entityId);
+                this.onHaEventsStateChanged(eventMessage, true);
             }
         }
     }

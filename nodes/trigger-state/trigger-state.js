@@ -1,53 +1,68 @@
 /* eslint-disable camelcase */
-const EventsNode = require('../../lib/events-node');
+const cloneDeep = require('lodash.clonedeep');
+const selectn = require('selectn');
+const { reduce } = require('p-iteration');
 
-module.exports = function(RED) {
+const EventsHaNode = require('../../lib/events-ha-node');
+const RenderTemplate = require('../../lib/mustache-context');
+const { shouldIncludeEvent } = require('../../lib/utils');
+
+module.exports = function (RED) {
     const nodeOptions = {
         debug: true,
         config: {
             entityid: {},
-            isenabled: {},
+            entityidfiltertype: {},
             constraints: {},
             customoutputs: {},
-            outputinitially: {}
-        }
+            outputinitially: {},
+            state_type: { value: 'str' },
+        },
     };
 
-    class TriggerState extends EventsNode {
+    class TriggerState extends EventsHaNode {
         constructor(nodeDefinition) {
             super(nodeDefinition, RED, nodeOptions);
 
-            const eventTopic = (this.eventTopic = `ha_events:state_changed:${
-                this.nodeConfig.entityid
-            }`);
-            this.addEventClientListener({
-                event: eventTopic,
-                handler: this.onEntityStateChanged.bind(this)
-            });
-            this.NUM_DEFAULT_MESSAGES = 2;
-            this.messageTimers = {};
+            let eventTopic = 'ha_events:state_changed';
 
-            this.loadPersistedData();
+            if (this.nodeConfig.entityidfiltertype === 'exact') {
+                eventTopic = this.eventTopic = `ha_events:state_changed:${this.nodeConfig.entityid}`;
+            }
+
+            this.addEventClientListener(
+                eventTopic,
+                this.onEntityStateChanged.bind(this)
+            );
+
+            this.NUM_DEFAULT_MESSAGES = 2;
 
             if (this.nodeConfig.outputinitially) {
-                this.addEventClientListener({
-                    event: 'ha_events:states_loaded',
-                    handler: this.onDeploy.bind(this)
-                });
+                // Here for when the node is deploy without the server config being deployed
+                if (this.isHomeAssistantRunning) {
+                    this.onDeploy();
+                } else {
+                    this.addEventClientListener(
+                        'ha_client:initial_connection_ready',
+                        this.onStatesLoaded.bind(this)
+                    );
+                }
             }
         }
 
         onInput({ message }) {
             if (message === 'enable' || message.payload === 'enable') {
-                this.isenabled = true;
-                this.saveNodeData('isenabled', true);
+                this.isEnabled = true;
+                this.saveNodeData('isEnabled', true);
                 this.updateConnectionStatus();
+                this.updateHomeAssistant();
                 return;
             }
             if (message === 'disable' || message.payload === 'disable') {
-                this.isenabled = false;
-                this.saveNodeData('isenabled', false);
+                this.isEnabled = false;
+                this.saveNodeData('isEnabled', false);
                 this.updateConnectionStatus();
+                this.updateHomeAssistant();
                 return;
             }
 
@@ -56,7 +71,7 @@ module.exports = function(RED) {
                 const evt = {
                     event_type: 'state_changed',
                     entity_id: entity_id,
-                    event: message.payload
+                    event: message.payload,
                 };
 
                 this.onEntityStateChanged(evt);
@@ -64,37 +79,88 @@ module.exports = function(RED) {
         }
 
         async onDeploy() {
-            const entityState = await this.nodeConfig.server.homeAssistant.getStates(
-                this.nodeConfig.entityid
-            );
-
-            let eventMessage = {
-                event_type: 'state_changed',
-                entity_id: this.nodeConfig.entityid,
-                event: {
-                    entity_id: this.nodeConfig.entityid,
-                    old_state: entityState,
-                    new_state: entityState
-                }
-            };
-
-            this.onEntityStateChanged(eventMessage);
+            const entities = await this.nodeConfig.server.homeAssistant.getStates();
+            this.onStatesLoaded(entities);
         }
 
-        async onEntityStateChanged(eventMessage) {
-            if (this.isenabled === false) {
+        onStatesLoaded(entities) {
+            for (const entityId in entities) {
+                const eventMessage = {
+                    event_type: 'state_changed',
+                    entity_id: entityId,
+                    event: {
+                        entity_id: entityId,
+                        old_state: entities[entityId],
+                        new_state: entities[entityId],
+                    },
+                };
+
+                this.onEntityStateChanged(eventMessage);
+            }
+        }
+
+        async onEntityStateChanged(evt) {
+            if (this.isEnabled === false) {
                 this.debugToClient(
                     'incoming: node is currently disabled, ignoring received event'
                 );
                 return;
             }
 
+            if (!selectn('event.new_state', evt)) {
+                return;
+            }
+
+            const eventMessage = cloneDeep(evt);
+
+            if (
+                !shouldIncludeEvent(
+                    eventMessage.entity_id,
+                    this.nodeConfig.entityid,
+                    this.nodeConfig.entityidfiltertype
+                )
+            ) {
+                return;
+            }
+
+            // Convert and save original state if needed
+            if (
+                this.nodeConfig.state_type &&
+                this.nodeConfig.state_type !== 'str'
+            ) {
+                if (eventMessage.event.old_state) {
+                    eventMessage.event.old_state.original_state =
+                        eventMessage.event.old_state.state;
+                    eventMessage.event.old_state.state = this.getCastValue(
+                        this.nodeConfig.state_type,
+                        eventMessage.event.old_state.state
+                    );
+                }
+                eventMessage.event.new_state.original_state =
+                    eventMessage.event.new_state.state;
+                eventMessage.event.new_state.state = this.getCastValue(
+                    this.nodeConfig.state_type,
+                    eventMessage.event.new_state.state
+                );
+            }
+
             try {
+                eventMessage.event.new_state.timeSinceChangedMs =
+                    Date.now() -
+                    new Date(
+                        eventMessage.event.new_state.last_changed
+                    ).getTime();
+
                 const constraintComparatorResults = await this.getConstraintComparatorResults(
                     this.nodeConfig.constraints,
                     eventMessage
                 );
-                const state = eventMessage.event.new_state.state;
+                const statusText = `${eventMessage.event.new_state.state}${
+                    eventMessage.event_type === 'triggered'
+                        ? ' (triggered)'
+                        : ''
+                } at: ${this.getPrettyDate()}`;
+
                 let outputs = this.getDefaultMessageOutputs(
                     constraintComparatorResults,
                     eventMessage
@@ -102,7 +168,7 @@ module.exports = function(RED) {
                 let status = {
                     fill: 'green',
                     shape: 'dot',
-                    text: `${state} at: ${this.getPrettyDate()}`
+                    text: statusText,
                 };
 
                 // If a constraint comparator failed we're done, also if no custom outputs to look at
@@ -114,7 +180,7 @@ module.exports = function(RED) {
                         status = {
                             fill: 'red',
                             shape: 'ring',
-                            text: `${state} at: ${this.getPrettyDate()}`
+                            text: statusText,
                         };
                     }
                     this.debugToClient(
@@ -125,12 +191,12 @@ module.exports = function(RED) {
                     return this.send(outputs);
                 }
 
-                const customOutputsComparatorResults = this.getCustomOutputsComparatorResults(
+                const customOutputsComparatorResults = await this.getCustomOutputsComparatorResults(
                     this.nodeConfig.customoutputs,
                     eventMessage
                 );
                 const customOutputMessages = customOutputsComparatorResults.map(
-                    r => r.message
+                    (r) => r.message
                 );
 
                 outputs = outputs.concat(customOutputMessages);
@@ -145,37 +211,52 @@ module.exports = function(RED) {
             }
         }
 
+        getNodeEntityId() {
+            return (
+                this.nodeConfig.entityidfiltertype === 'exact' &&
+                this.nodeConfig.entityid
+            );
+        }
+
+        triggerNode(eventMessage) {
+            this.onEntityStateChanged(eventMessage);
+        }
+
         async getConstraintComparatorResults(constraints, eventMessage) {
             const comparatorResults = [];
 
             // Check constraints
-            for (let constraint of constraints) {
+            for (const constraint of constraints) {
                 const {
                     comparatorType,
                     comparatorValue,
                     comparatorValueDatatype,
-                    propertyValue
+                    propertyValue,
                 } = constraint;
                 const constraintTarget = await this.getConstraintTargetData(
                     constraint,
                     eventMessage.event
                 );
-                const actualValue = this.utils.reach(
+
+                const actualValue = selectn(
                     constraint.propertyValue,
                     constraintTarget.state
                 );
-                const comparatorResult = this.getComparatorResult(
+
+                const comparatorResult = await this.getComparatorResult(
                     comparatorType,
                     comparatorValue,
                     actualValue,
-                    comparatorValueDatatype
+                    comparatorValueDatatype,
+                    {
+                        entity: eventMessage.event.new_state,
+                        prevEntity: eventMessage.event.old_state,
+                    }
                 );
 
                 if (comparatorResult === false) {
                     this.debugToClient(
-                        `constraint comparator: failed entity "${
-                            constraintTarget.entityid
-                        }" property "${propertyValue}" with value ${actualValue} failed "${comparatorType}" check against (${comparatorValueDatatype}) ${comparatorValue}`
+                        `constraint comparator: failed entity "${constraintTarget.entityid}" property "${propertyValue}" with value ${actualValue} failed "${comparatorType}" check against (${comparatorValueDatatype}) ${comparatorValue}`
                     ); // eslint-disable-line
                 }
 
@@ -183,15 +264,15 @@ module.exports = function(RED) {
                     constraint,
                     constraintTarget,
                     actualValue,
-                    comparatorResult
+                    comparatorResult,
                 });
             }
             const failedComparators = comparatorResults.filter(
-                res => !res.comparatorResult
+                (res) => !res.comparatorResult
             );
             return {
                 all: comparatorResults || [],
-                failed: failedComparators || []
+                failed: failedComparators || [],
             };
         }
 
@@ -201,7 +282,7 @@ module.exports = function(RED) {
             const msg = {
                 topic: entity_id,
                 payload: event.new_state.state,
-                data: eventMessage
+                data: eventMessage,
             };
             let outputs;
 
@@ -219,34 +300,48 @@ module.exports = function(RED) {
         }
 
         getCustomOutputsComparatorResults(outputs, eventMessage) {
-            return outputs.reduce((acc, output, reduceIndex) => {
-                let result = {
-                    output,
-                    comparatorMatched: true,
-                    actualValue: null,
-                    message: null
-                };
+            return reduce(
+                outputs,
+                async (acc, output, reduceIndex) => {
+                    const result = {
+                        output,
+                        comparatorMatched: true,
+                        actualValue: null,
+                        message: null,
+                    };
 
-                if (output.comparatorPropertyType !== 'always') {
-                    result.actualValue = this.utils.reach(
-                        output.comparatorPropertyValue,
-                        eventMessage.event
+                    if (output.comparatorPropertyType !== 'always') {
+                        result.actualValue = selectn(
+                            output.comparatorPropertyValue,
+                            eventMessage.event
+                        );
+                        result.comparatorMatched = await this.getComparatorResult(
+                            output.comparatorType,
+                            output.comparatorValue,
+                            result.actualValue,
+                            output.comparatorValueDatatype,
+                            {
+                                entity: eventMessage.event.new_state,
+                                prevEntity: eventMessage.event.old_state,
+                            }
+                        );
+                    }
+                    result.message = this.getOutputMessage(
+                        result,
+                        eventMessage
                     );
-                    result.comparatorMatched = this.getComparatorResult(
-                        output.comparatorType,
-                        output.comparatorValue,
-                        result.actualValue,
-                        output.comparatorValueDatatype
-                    );
-                }
-                result.message = this.getOutputMessage(result, eventMessage);
-                acc.push(result);
-                return acc;
-            }, []);
+                    acc.push(result);
+                    return acc;
+                },
+                []
+            );
         }
 
         async getConstraintTargetData(constraint, triggerEvent) {
-            let targetData = { entityid: null, state: null };
+            const targetData = {
+                entityid: null,
+                state: null,
+            };
             try {
                 const isTargetThisEntity =
                     constraint.targetType === 'this_entity';
@@ -254,87 +349,29 @@ module.exports = function(RED) {
                     ? this.nodeConfig.entityid
                     : constraint.targetValue;
 
-                // TODO: Non 'self' targets state is just new_state of an incoming event, wrap to hack around the fact
-                // NOTE: UI needs changing to handle this there, and also to hide "previous state" if target is not self
-                if (isTargetThisEntity) {
-                    targetData.state = triggerEvent;
-                } else {
-                    const state = await this.nodeConfig.server.homeAssistant.getStates(
-                        targetData.entityid
-                    );
+                targetData.state = isTargetThisEntity
+                    ? triggerEvent
+                    : await this.nodeConfig.server.homeAssistant.getStates(
+                          targetData.entityid
+                      );
+
+                if (
+                    !isTargetThisEntity &&
+                    constraint.propertyType === 'current_state'
+                ) {
                     targetData.state = {
-                        new_state: state
+                        new_state: targetData.state,
                     };
                 }
             } catch (e) {
                 this.debug(
-                    'Error during trigger:state comparator evalutation: ',
+                    'Error during trigger:state comparator evaluation: ',
                     e.stack
                 );
                 throw e;
             }
 
             return targetData;
-        }
-
-        /* eslint-disable indent */
-        getCastValue(datatype, value) {
-            if (!datatype) return value;
-
-            switch (datatype) {
-                case 'num':
-                    return parseFloat(value);
-                case 'str':
-                    return value + '';
-                case 'bool':
-                    return !!value;
-                case 're':
-                    return new RegExp(value);
-                case 'list':
-                    return value.split(',');
-                default:
-                    return value;
-            }
-        }
-
-        /* eslint-disable indent */
-        getComparatorResult(
-            comparatorType,
-            comparatorValue,
-            actualValue,
-            comparatorValueDatatype
-        ) {
-            const cValue = this.getCastValue(
-                comparatorValueDatatype,
-                comparatorValue
-            );
-
-            switch (comparatorType) {
-                case 'is':
-                case 'is_not':
-                    // Datatype might be num, bool, str, re (regular expression)
-                    const isMatch =
-                        comparatorValueDatatype === 're'
-                            ? cValue.test(actualValue)
-                            : cValue === actualValue;
-                    return comparatorType === 'is' ? isMatch : !isMatch;
-                case 'includes':
-                case 'does_not_include':
-                    const isIncluded = cValue.includes(actualValue);
-                    return comparatorType === 'includes'
-                        ? isIncluded
-                        : !isIncluded;
-                case 'greater_than': // here for backwards compatibility
-                case '>':
-                    return actualValue > cValue;
-                case '>=':
-                    return actualValue >= cValue;
-                case 'less_than': // here for backwards compatibility
-                case '<':
-                    return actualValue < cValue;
-                case '<=':
-                    return actualValue <= cValue;
-            }
         }
 
         getOutputMessage(
@@ -344,47 +381,51 @@ module.exports = function(RED) {
             // If comparator did not match
             if (!comparatorMatched) {
                 this.debugToClient(
-                    `output comparator failed: property "${
-                        output.comparatorPropertyValue
-                    }" with value ${actualValue} failed "${
-                        output.comparatorType
-                    }" check against ${output.comparatorValue}`
+                    `output comparator failed: property "${output.comparatorPropertyValue}" with value ${actualValue} failed "${output.comparatorType}" check against ${output.comparatorValue}`
                 ); // eslint-disable-line
                 return null;
             }
 
-            if (output.messageType === 'default') {
-                return {
-                    topic: eventMessage.entity_id,
-                    payload: eventMessage.event.new_state.state,
-                    data: eventMessage
-                };
-            }
+            let payload = eventMessage.event.new_state.state;
+            if (
+                output.messageType === 'custom' ||
+                output.messageType === 'payload'
+            ) {
+                // Render Template Variables
+                payload = RenderTemplate(
+                    output.messageValue,
+                    eventMessage.event,
+                    this.node.context(),
+                    this.nodeConfig.server.name
+                );
 
-            try {
-                return JSON.parse(output.messageValue);
-            } catch (e) {
-                return output.messageValue;
-            }
-        }
-
-        async loadPersistedData() {
-            try {
-                const data = await this.getNodeData();
-                if (data && data.hasOwnProperty('isenabled')) {
-                    this.isenabled = data.isenabled;
-                    this.updateConnectionStatus();
+                switch (output.messageValueType) {
+                    case 'num':
+                        payload = Number(payload);
+                        break;
+                    case 'bool':
+                        payload = payload === 'true';
+                        break;
+                    case 'str':
+                        break;
+                    case 'json':
+                    default:
+                        try {
+                            payload = JSON.parse(payload);
+                        } catch (e) {}
+                        break;
                 }
-            } catch (e) {
-                this.error(e.message);
-            }
-        }
 
-        async onClose(removed) {
-            super.onClose();
-            if (removed) {
-                await this.removeNodeData();
+                if (output.messageType === 'custom') {
+                    return payload;
+                }
             }
+
+            return {
+                topic: eventMessage.entity_id,
+                payload,
+                data: eventMessage,
+            };
         }
     }
 

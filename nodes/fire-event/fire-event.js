@@ -1,17 +1,46 @@
-const BaseNode = require('../../lib/base-node');
+const Joi = require('@hapi/joi');
 
-module.exports = function(RED) {
+const BaseNode = require('../../lib/base-node');
+const RenderTemplate = require('../../lib/mustache-context');
+
+module.exports = function (RED) {
     const nodeOptions = {
-        debug: true,
         config: {
+            name: {},
+            server: { isNode: true },
             event: {},
             data: {},
-            mergecontext: {},
-            name: {},
-            server: {
-                isNode: true
-            }
-        }
+            dataType: (nodeDef) => nodeDef.dataType || 'json',
+        },
+        input: {
+            event: {
+                messageProp: 'payload.event',
+                configProp: 'event',
+                validation: {
+                    haltOnFail: true,
+                    schema: Joi.string().label('event'),
+                },
+            },
+            data: {
+                messageProp: 'payload.data',
+                configProp: 'data',
+                validation: {
+                    haltOnFail: false,
+                    schema: Joi.string().label('data'),
+                },
+            },
+            dataType: {
+                messageProp: 'payload.dataType',
+                configProp: 'dataType',
+                default: 'json',
+                validation: {
+                    haltOnFail: true,
+                    schema: Joi.string()
+                        .valid('json', 'jsonata')
+                        .label('dataType'),
+                },
+            },
+        },
     };
 
     class FireEventNode extends BaseNode {
@@ -21,6 +50,7 @@ module.exports = function(RED) {
 
         // Disable connection status for api node
         setConnectionStatus() {}
+
         tryToObject(v) {
             if (!v) return null;
             try {
@@ -30,78 +60,57 @@ module.exports = function(RED) {
             }
         }
 
-        onInput({ message }) {
-            let payload, payloadEvent;
-
-            if (message && message.payload) {
-                payload = this.tryToObject(message.payload);
-                payloadEvent = this.utils.reach('event', payload);
-            }
-            const configEvent = this.nodeConfig.event;
-
-            const eventType = payloadEvent || configEvent;
-            const eventData = this.getEventData(payload);
-            if (!eventType)
-                throw new Error(
-                    'fire event node is missing "event" property, not found in config or payload'
+        onInput({ message, parsedMessage }) {
+            const eventType = RenderTemplate(
+                parsedMessage.event.value,
+                message,
+                this.node.context(),
+                this.nodeConfig.server.name
+            );
+            let eventData;
+            if (parsedMessage.dataType.value === 'jsonata') {
+                try {
+                    eventData = JSON.stringify(
+                        this.evaluateJSONata(parsedMessage.data.value, message)
+                    );
+                } catch (e) {
+                    this.setStatusFailed('Error');
+                    this.node.error(e.message, message);
+                    return;
+                }
+            } else {
+                eventData = RenderTemplate(
+                    typeof parsedMessage.data.value === 'object'
+                        ? JSON.stringify(parsedMessage.data.value)
+                        : parsedMessage.data.value,
+                    message,
+                    this.node.context(),
+                    this.nodeConfig.server.name
                 );
+            }
 
             this.debug(`Fire Event: ${eventType} -- ${JSON.stringify({})}`);
-            this.status({
-                fill: 'green',
-                shape: 'dot',
-                text: `${eventType} at: ${this.getPrettyDate()}`
-            });
 
             message.payload = {
                 event: eventType,
-                data: eventData || null
+                data: eventData || null,
             };
-            this.send(message);
 
-            return this.nodeConfig.server.api
+            this.setStatusSending();
+
+            return this.httpClient
                 .fireEvent(eventType, eventData)
-                .catch(err => {
+                .then(() => {
+                    this.setStatusSuccess(eventType);
+                    this.send(message);
+                })
+                .catch((err) => {
                     this.error(
-                        `Error firing event, home assistant rest api error: ${
-                            err.message
-                        }`,
+                        `Error firing event, home assistant rest api error: ${err.message}`,
                         message
                     );
-                    this.status({
-                        fill: 'red',
-                        shape: 'ring',
-                        text: `API Error at: ${this.prettyDate}`
-                    });
+                    this.setStatusFailed('API Error');
                 });
-        }
-
-        getEventData(payload) {
-            let eventData;
-            let contextData = {};
-
-            let payloadData = this.utils.reach('data', payload);
-            let configData = this.tryToObject(this.nodeConfig.data);
-            payloadData = payloadData || {};
-            configData = configData || {};
-
-            // Cacluate payload to send end priority ends up being 'Config, Global Ctx, Flow Ctx, Payload' with right most winning
-            if (this.nodeConfig.mergecontext) {
-                const ctx = this.node.context();
-                let flowVal = ctx.flow.get(this.nodeConfig.mergecontext);
-                let globalVal = ctx.global.get(this.nodeConfig.mergecontext);
-                flowVal = flowVal || {};
-                globalVal = globalVal || {};
-                contextData = this.utils.merge({}, globalVal, flowVal);
-            }
-
-            eventData = this.utils.merge(
-                {},
-                configData,
-                contextData,
-                payloadData
-            );
-            return eventData;
         }
     }
 

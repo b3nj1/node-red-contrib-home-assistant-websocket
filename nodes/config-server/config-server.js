@@ -1,37 +1,138 @@
+const bonjour = require('bonjour')();
+const flatten = require('flat');
+const selectn = require('selectn');
+const uniq = require('lodash.uniq');
+
 const BaseNode = require('../../lib/base-node');
+const HomeAssistant = require('../../lib/home-assistant');
+const { toCamelCase } = require('../../lib/utils');
 
-module.exports = function(RED) {
-    const HomeAssistant = require('../../lib/node-home-assistant');
-
+module.exports = function (RED) {
     const httpHandlers = {
-        getEntities: function(req, res, next) {
+        disableCache: function (req, res, next) {
+            if (this.nodeConfig.cacheJson === false) {
+                res.setHeader('Surrogate-Control', 'no-store');
+                res.setHeader(
+                    'Cache-Control',
+                    'no-store, no-cache, must-revalidate, proxy-revalidate'
+                );
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
+            }
+            next();
+        },
+        getEntities: function (req, res, next) {
+            if (!this.homeAssistant) {
+                return res.json([]);
+            }
+
             return this.homeAssistant
                 .getEntities()
-                .then(states => res.json(JSON.stringify(states)))
-                .catch(e => this.error(e.message));
+                .then((states) => res.json(states))
+                .catch((e) => this.error(e.message));
         },
-        getStates: function(req, res, next) {
+        getStates: function (req, res, next) {
+            if (!this.homeAssistant) {
+                return res.json([]);
+            }
+
             return this.homeAssistant
                 .getStates()
-                .then(states => res.json(JSON.stringify(states)))
-                .catch(e => this.error(e.message));
+                .then((states) => res.json(states))
+                .catch((e) => this.error(e.message));
         },
-        getServices: function(req, res, next) {
+        getServices: function (req, res, next) {
+            if (!this.homeAssistant) {
+                return res.json([]);
+            }
+
             return this.homeAssistant
                 .getServices()
-                .then(services => res.json(JSON.stringify(services)))
-                .catch(e => this.error(e.message));
-        }
+                .then((services) => res.json(services))
+                .catch((e) => this.error(e.message));
+        },
+        getProperties: async function (req, res, next) {
+            if (!this.homeAssistant) {
+                return res.json([]);
+            }
+
+            let flat = [];
+            let singleEntity = !!req.query.entityId;
+
+            try {
+                var states = await this.homeAssistant.getStates(
+                    req.query.entityId
+                );
+
+                if (!states) {
+                    states = await this.homeAssistant.getStates();
+                    singleEntity = false;
+                }
+            } catch (e) {
+                this.error(e.message);
+            }
+
+            if (singleEntity) {
+                flat = Object.keys(flatten(states)).filter(
+                    (e) => e.indexOf(req.query.term) !== -1
+                );
+            } else {
+                flat = Object.values(states).map((entity) =>
+                    Object.keys(flatten(entity))
+                );
+            }
+
+            const uniqArray = uniq(
+                [].concat(...flat).sort((a, b) => {
+                    if (!a.includes('.') && b.includes('.')) return -1;
+                    if (a.includes('.') && !b.includes('.')) return 1;
+                    if (a < b) return -1;
+                    if (a > b) return 1;
+
+                    return 0;
+                })
+            );
+
+            res.json(uniqArray);
+        },
+        getIntegrationVersion: function (req, res, next) {
+            const data = { version: 0 };
+
+            if (this.websocket && this.websocket.isConnected) {
+                data.version = this.websocket.integrationVersion;
+            }
+            res.json(data);
+        },
     };
+
+    RED.httpAdmin.get('/homeassistant/discover', async function (req, res) {
+        const instances = [];
+        bonjour.find({ type: 'home-assistant' }, (service) => {
+            instances.push({
+                label: service.name
+                    ? `${service.name} (${service.txt.base_url})`
+                    : service.txt.base_url,
+                value: service.txt.base_url,
+            });
+        });
+
+        // Add a bit of delay for all services to be discovered
+        setTimeout(() => {
+            res.json(instances);
+        }, 3000);
+    });
 
     const nodeOptions = {
         debug: true,
         config: {
             name: {},
             legacy: {},
-            hassio: {},
-            rejectUnauthorizedCerts: {}
-        }
+            addon: {},
+            rejectUnauthorizedCerts: {},
+            ha_boolean: {},
+            connectionDelay: {},
+            cacheJson: {},
+        },
     };
 
     class ConfigServerNode extends BaseNode {
@@ -47,94 +148,93 @@ module.exports = function(RED) {
 
                 this.RED.nodes.addCredentials(this.id, this.credentials);
             }
-            // Check if using Hass.io URL and import proxy token
-            if (this.credentials.host === 'http://hassio/homeassistant') {
-                this.credentials.access_token = process.env.HASSIO_TOKEN;
+            // Check if using HA Add-on and import proxy token
+            const addonBaseUrls = [
+                'http://hassio/homeassistant',
+                'http://supervisor/core',
+            ];
+            if (
+                this.nodeConfig.addon ||
+                addonBaseUrls.includes(this.credentials.host)
+            ) {
+                this.credentials.host = 'http://supervisor/core';
+                this.credentials.access_token = process.env.SUPERVISOR_TOKEN;
 
                 this.RED.nodes.addCredentials(this.id, this.credentials);
+            } else {
+                this.nodeConfig.connectionDelay = false;
             }
 
-            this.RED.httpAdmin.get(
-                '/homeassistant/entities',
-                RED.auth.needsPermission('server.read'),
-                httpHandlers.getEntities.bind(this)
-            );
-            this.RED.httpAdmin.get(
-                '/homeassistant/states',
-                RED.auth.needsPermission('server.read'),
-                httpHandlers.getStates.bind(this)
-            );
-            this.RED.httpAdmin.get(
-                '/homeassistant/services',
-                RED.auth.needsPermission('server.read'),
-                httpHandlers.getServices.bind(this)
+            const endpoints = {
+                entities: httpHandlers.getEntities,
+                states: httpHandlers.getStates,
+                services: httpHandlers.getServices,
+                properties: httpHandlers.getProperties,
+            };
+            Object.entries(endpoints).forEach(([key, value]) =>
+                this.RED.httpAdmin.get(
+                    `/homeassistant/${this.id}/${key}`,
+                    RED.auth.needsPermission('server.read'),
+                    httpHandlers.disableCache.bind(this),
+                    value.bind(this)
+                )
             );
 
-            const HTTP_STATIC_OPTS = {
-                root: require('path').join(__dirname, '..', '/_static'),
-                dotfiles: 'deny'
-            };
             this.RED.httpAdmin.get(
-                '/homeassistant/static/*',
+                `/homeassistant/${this.id}/version`,
                 RED.auth.needsPermission('server.read'),
-                function(req, res) {
-                    res.sendFile(req.params[0], HTTP_STATIC_OPTS);
-                }
+                httpHandlers.getIntegrationVersion.bind(this)
             );
 
             this.setOnContext('states', []);
             this.setOnContext('services', []);
             this.setOnContext('isConnected', false);
+            this.exposedNodes = [];
 
             if (this.credentials.host && !this.homeAssistant) {
-                this.homeAssistant = new HomeAssistant({
-                    baseUrl: this.credentials.host,
-                    apiPass: this.credentials.access_token,
-                    legacy: this.nodeConfig.legacy,
-                    rejectUnauthorizedCerts: this.nodeConfig
-                        .rejectUnauthorizedCerts
-                });
-                this.api = this.homeAssistant.api;
-                this.websocket = this.homeAssistant.websocket;
-
-                this.homeAssistant
-                    .startListening()
-                    // .then(this.onHaEventsOpen())
-                    .catch(err => this.node.error(err));
-
-                this.websocket.addListener(
-                    'ha_events:close',
-                    this.onHaEventsClose.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:open',
-                    this.onHaEventsOpen.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:connecting',
-                    this.onHaEventsConnecting.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:error',
-                    this.onHaEventsError.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:state_changed',
-                    this.onHaStateChanged.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:states_loaded',
-                    this.onHaStatesLoaded.bind(this)
-                );
-                this.websocket.addListener(
-                    'ha_events:services_loaded',
-                    this.onHaServicesLoaded.bind(this)
-                );
+                this.init();
             }
         }
 
+        async init() {
+            this.homeAssistant = new HomeAssistant({
+                baseUrl: this.credentials.host,
+                apiPass: this.credentials.access_token,
+                legacy: this.nodeConfig.legacy,
+                rejectUnauthorizedCerts: this.nodeConfig
+                    .rejectUnauthorizedCerts,
+                connectionDelay: this.nodeConfig.connectionDelay,
+            });
+            this.http = this.homeAssistant.http;
+            this.websocket = this.homeAssistant.websocket;
+
+            // Setup event listeners
+            const events = {
+                'ha_client:close': this.onHaEventsClose,
+                'ha_client:open': this.onHaEventsOpen,
+                'ha_client:connecting': this.onHaEventsConnecting,
+                'ha_client:error': this.onHaEventsError,
+                'ha_client:states_loaded': this.onHaStatesLoaded,
+                'ha_client:services_loaded': this.onHaServicesLoaded,
+                'ha_events:state_changed': this.onHaStateChanged,
+            };
+            Object.entries(events).forEach(([event, callback]) =>
+                this.websocket.addListener(event, callback.bind(this))
+            );
+            this.websocket.once(
+                'ha_client:connected',
+                this.registerEvents.bind(this)
+            );
+
+            await this.homeAssistant.connect().catch((err) => {
+                this.websocket.connectionState = this.websocket.ERROR;
+                this.websocket.emit('updateNodeStatus');
+                this.node.error(err);
+            });
+        }
+
         get nameAsCamelcase() {
-            return this.utils.toCamelCase(this.nodeConfig.name);
+            return toCamelCase(this.nodeConfig.name);
         }
 
         setOnContext(key, value) {
@@ -147,6 +247,7 @@ module.exports = function(RED) {
 
         getFromContext(key) {
             let haCtx = this.context().global.get('homeassistant');
+            haCtx = haCtx || {};
             return haCtx[this.nameAsCamelcase]
                 ? haCtx[this.nameAsCamelcase][key]
                 : null;
@@ -177,8 +278,7 @@ module.exports = function(RED) {
 
         onHaEventsConnecting() {
             this.setOnContext('isConnected', false);
-            this.debug(`WebSocket Connecting ${this.credentials.host}`);
-            this.debug('config server event listener connecting');
+            this.log(`WebSocket Connecting ${this.credentials.host}`);
         }
 
         onHaEventsClose() {
@@ -186,7 +286,6 @@ module.exports = function(RED) {
                 this.log(`WebSocket Closed ${this.credentials.host}`);
             }
             this.setOnContext('isConnected', false);
-            this.debug('config server event listener closed');
         }
 
         onHaEventsError(err) {
@@ -197,7 +296,7 @@ module.exports = function(RED) {
         // Close WebSocket client on redeploy or node-RED shutdown
         async onClose(removed) {
             super.onClose();
-            const webSocketClient = this.utils.reach(
+            const webSocketClient = selectn(
                 'homeAssistant.websocket.client',
                 this
             );
@@ -207,12 +306,18 @@ module.exports = function(RED) {
                 webSocketClient.close();
             }
         }
+
+        registerEvents() {
+            this.homeAssistant.websocket.subscribeEvents(
+                this.homeAssistant.eventsList
+            );
+        }
     }
 
     RED.nodes.registerType('server', ConfigServerNode, {
         credentials: {
             host: { type: 'text' },
-            access_token: { type: 'text' }
-        }
+            access_token: { type: 'text' },
+        },
     });
 };

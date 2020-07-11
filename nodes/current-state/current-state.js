@@ -1,28 +1,45 @@
-const BaseNode = require('../../lib/base-node');
-const Joi = require('joi');
+const Joi = require('@hapi/joi');
 
-module.exports = function(RED) {
+const BaseNode = require('../../lib/base-node');
+const RenderTemplate = require('../../lib/mustache-context');
+
+module.exports = function (RED) {
     const nodeOptions = {
-        debug: true,
         config: {
-            name: {},
             halt_if: {},
+            halt_if_type: (nodeDef) => nodeDef.halt_if_type || 'str',
+            halt_if_compare: (nodeDef) => nodeDef.halt_if_compare || 'is',
             override_topic: {},
-            override_payload: {},
-            override_data: {},
             entity_id: {},
-            server: { isNode: true }
+            state_type: (nodeDef) => nodeDef.state_type || 'str',
+            state_location: (nodeDef) => nodeDef.state_location || 'payload',
+            // state location type
+            override_payload: (nodeDef) => {
+                if (nodeDef.state_location === undefined) {
+                    return nodeDef.override_payload !== false ? 'msg' : 'none';
+                }
+                return nodeDef.override_payload;
+            },
+            entity_location: (nodeDef) => nodeDef.entity_location || 'data',
+            // entity location type
+            override_data: (nodeDef) => {
+                if (nodeDef.entity_location === undefined) {
+                    return nodeDef.override_data !== false ? 'msg' : 'none';
+                }
+                return nodeDef.override_data;
+            },
+            blockInputOverrides: {},
         },
         input: {
             entity_id: {
                 messageProp: 'payload.entity_id',
-                configProp: 'entity_id', // Will be used if value not found on message,
+                configProp: 'entity_id',
                 validation: {
                     haltOnFail: true,
-                    schema: Joi.string() // Validates on message if exists, Joi will also attempt coercion
-                }
-            }
-        }
+                    schema: Joi.string().label('entity_id'),
+                },
+            },
+        },
     };
 
     class CurrentStateNode extends BaseNode {
@@ -32,61 +49,98 @@ module.exports = function(RED) {
 
         /* eslint-disable camelcase */
         async onInput({ parsedMessage, message }) {
-            const entity_id = this.nodeConfig.entity_id
-                ? this.nodeConfig.entity_id
-                : parsedMessage.entity_id.value;
-            const logAndContinueEmpty = logMsg => {
-                this.node.warn(logMsg);
-                return { payload: {} };
-            };
+            const config = this.nodeConfig;
+            const entityId = RenderTemplate(
+                config.blockInputOverrides === true
+                    ? config.entity_id
+                    : parsedMessage.entity_id.value,
+                message,
+                this.node.context(),
+                config.server.name
+            );
 
-            if (!entity_id)
-                return logAndContinueEmpty(
-                    'entity ID not set, cannot get current state, sending empty payload'
-                );
-
-            const states = await this.nodeConfig.server.homeAssistant.getStates();
-            if (!states)
-                return logAndContinueEmpty(
-                    'local state cache missing, sending empty payload'
-                );
-
-            const currentState = states[entity_id];
-            if (!currentState)
-                return logAndContinueEmpty(
-                    `entity could not be found in cache for entity_id: ${entity_id}, sending empty payload`
-                );
-
-            const shouldHaltIfState =
-                this.nodeConfig.halt_if &&
-                currentState.state === this.nodeConfig.halt_if;
-            if (shouldHaltIfState) {
-                const debugMsg = `Get current state: halting processing due to current state of ${entity_id} matches "halt if state" option`;
-                this.debug(debugMsg);
-                this.debugToClient(debugMsg);
-                this.status({
-                    fill: 'red',
-                    shape: 'ring',
-                    text: `${currentState.state} at: ${this.getPrettyDate()}`
-                });
-                return null;
+            if (config.server === null) {
+                this.node.error('No valid server selected.', message);
+                return;
             }
 
-            // default switch to true if undefined (backward compatibility
-            const override_payload = this.nodeConfig.override_payload !== false;
-            const override_topic = this.nodeConfig.override_topic !== false;
-            const override_data = this.nodeConfig.override_data !== false;
+            const entity = await config.server.homeAssistant.getStates(
+                entityId
+            );
+            if (!entity) {
+                this.node.error(
+                    `Entity could not be found in cache for entity_id: ${entityId}`,
+                    message
+                );
+                return;
+            }
 
-            if (override_topic) message.topic = entity_id;
-            if (override_payload) message.payload = currentState.state;
-            if (override_data) message.data = currentState;
+            entity.timeSinceChangedMs =
+                Date.now() - new Date(entity.last_changed).getTime();
 
-            this.status({
-                fill: 'green',
-                shape: 'dot',
-                text: `${currentState.state} at: ${this.getPrettyDate()}`
+            // Convert and save original state if needed
+            if (config.state_type !== 'str') {
+                entity.original_state = entity.state;
+                entity.state = this.getCastValue(
+                    config.state_type,
+                    entity.state
+                );
+            }
+
+            // default switch to true if undefined (backward compatibility)
+            message.topic =
+                config.override_topic !== false ? entityId : message.topic;
+
+            // Set 'State Location'
+            this.setContextValue(
+                entity.state,
+                config.override_payload,
+                config.state_location,
+                message
+            );
+
+            // Set 'Entity Location'
+            this.setContextValue(
+                entity,
+                config.override_data,
+                config.entity_location,
+                message
+            );
+
+            const isIfState = await this.getComparatorResult(
+                config.halt_if_compare,
+                config.halt_if,
+                entity.state,
+                config.halt_if_type,
+                {
+                    message,
+                    entity,
+                }
+            ).catch((e) => {
+                this.setStatusFailed('Error');
+                this.node.error(e.message, message);
             });
-            this.node.send(message);
+
+            // Handle version 0 'halt if' outputs
+            if (config.version < 1) {
+                if (config.halt_if && isIfState) {
+                    this.setStatusFailed(entity.state);
+                    this.send([null, message]);
+                    return;
+                }
+                this.setStatusSuccess(entity.state);
+                this.send([message, null]);
+                return;
+            }
+
+            if (config.halt_if && !isIfState) {
+                this.setStatusFailed(entity.state);
+                this.send([null, message]);
+                return;
+            }
+
+            this.setStatusSuccess(entity.state);
+            this.send([message, null]);
         }
     }
 

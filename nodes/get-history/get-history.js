@@ -1,7 +1,10 @@
-const Joi = require('joi');
-const BaseNode = require('../../lib/base-node');
+const Joi = require('@hapi/joi');
+const timestring = require('timestring');
 
-module.exports = function(RED) {
+const BaseNode = require('../../lib/base-node');
+const RenderTemplate = require('../../lib/mustache-context');
+
+module.exports = function (RED) {
     const nodeOptions = {
         debug: true,
         config: {
@@ -10,11 +13,17 @@ module.exports = function(RED) {
             startdate: {},
             enddate: {},
             entityid: {},
-            entityidtype: {}
+            entityidtype: {},
+            useRelativeTime: {},
+            relativeTime: {},
+            flatten: {},
+            output_type: {},
+            output_location_type: {},
+            output_location: {},
         },
         input: {
-            startdate: {
-                messageProp: 'startdate',
+            startDate: {
+                messageProp: ['payload.startdate', 'startdate'],
                 configProp: 'startdate',
                 default: () => {
                     const yesterday = new Date();
@@ -22,31 +31,33 @@ module.exports = function(RED) {
                     return yesterday.toISOString();
                 },
                 validation: {
-                    haltOnFail: true,
-                    schema: Joi.date()
-                        .optional()
-                        .allow('')
-                }
+                    schema: Joi.date().optional().allow('').label('startdate'),
+                },
             },
-            enddate: {
-                messageProp: 'enddate',
+            endDate: {
+                messageProp: ['payload.enddate', 'enddate'],
                 configProp: 'enddate',
                 validation: {
-                    haltOnFail: true,
-                    schema: Joi.date()
-                        .optional()
-                        .allow('')
-                }
+                    schema: Joi.date().optional().allow('').label('enddate'),
+                },
             },
-            entityid: {
-                messageProp: 'entityid',
-                configProp: 'entityid'
+            entityId: {
+                messageProp: ['payload.entity_id', 'entityid'],
+                configProp: 'entityid',
             },
-            entityidtype: {
-                messageProp: 'entityidtype',
-                configProp: 'entityidtype'
-            }
-        }
+            entityIdType: {
+                messageProp: ['payload.entityidtype', 'entityidtype'],
+                configProp: 'entityidtype',
+            },
+            relativeTime: {
+                messageProp: ['payload.relativetime', 'relativetime'],
+                configProp: 'relativeTime',
+            },
+            flatten: {
+                messageProp: ['payload.flatten', 'flatten'],
+                configProp: 'flatten',
+            },
+        },
     };
 
     class GetHistoryNode extends BaseNode {
@@ -54,52 +65,102 @@ module.exports = function(RED) {
             super(nodeDefinition, RED, nodeOptions);
         }
 
-        onInput({ parsedMessage, message }) {
-            let { startdate, enddate, entityid, entityidtype } = parsedMessage;
-            startdate = startdate.value;
-            enddate = enddate.value;
-            entityid = entityid.value;
-
-            let apiRequest =
-                entityidtype.value === 'includes' && entityid
-                    ? this.nodeConfig.server.api.getHistory(
-                          startdate,
-                          null,
-                          enddate,
-                          {
-                              include: new RegExp(entityid)
-                          }
-                      )
-                    : this.nodeConfig.server.api.getHistory(
-                          startdate,
-                          entityid,
-                          enddate
+        async onInput({ parsedMessage, message }) {
+            let {
+                startDate,
+                endDate,
+                entityId,
+                entityIdType,
+                relativeTime,
+                flatten,
+            } = parsedMessage;
+            startDate = startDate.value;
+            endDate = endDate.value;
+            entityId =
+                parsedMessage.entityId.source === 'message'
+                    ? entityId.value
+                    : RenderTemplate(
+                          entityId.value,
+                          message,
+                          this.node.context(),
+                          this.nodeConfig.server.name
                       );
+            relativeTime = relativeTime.value;
+            flatten = flatten.value;
+            const useRelativeTime = this.nodeConfig.useRelativeTime;
 
-            return apiRequest
-                .then(res => {
-                    message.startdate = startdate;
-                    message.enddate = enddate || null;
-                    message.entityid = entityid || null;
-                    message.payload = res;
-                    this.send(message);
-                    this.status({
-                        fill: 'green',
-                        shape: 'dot',
-                        text: 'Success'
-                    });
-                })
-                .catch(err => {
-                    this.warn(
-                        'Error calling service, home assistant api error',
-                        err
-                    );
-                    this.error(
-                        'Error calling service, home assistant api error',
+            if (this.nodeConfig.server === null) {
+                this.node.error('No valid server selected.', message);
+                return;
+            }
+
+            if (
+                useRelativeTime ||
+                parsedMessage.relativeTime.source === 'message'
+            ) {
+                startDate = new Date(
+                    Date.now() - timestring(relativeTime, 'ms')
+                ).toISOString();
+                endDate = new Date().toISOString();
+            }
+
+            const apiRequest =
+                entityIdType.value === 'includes' && entityId
+                    ? this.httpClient.getHistory(startDate, null, endDate, {
+                          flatten: flatten,
+                          include: new RegExp(entityId),
+                      })
+                    : this.httpClient.getHistory(startDate, entityId, endDate, {
+                          flatten: flatten,
+                      });
+
+            this.setStatusSending('Requesting');
+
+            let results;
+            try {
+                results = await apiRequest;
+                message.startdate = startDate;
+                message.enddate = endDate || null;
+                message.entity_id = entityId || null;
+            } catch (err) {
+                this.error(`Error get-history: ${err.message}`, message);
+                this.setStatusFailed('Error');
+
+                return;
+            }
+
+            if (this.nodeConfig.output_location === undefined) {
+                this.nodeConfig.output_location = 'payload';
+                this.nodeConfig.output_location_type = 'msg';
+            }
+
+            switch (this.nodeConfig.output_type) {
+                case 'split':
+                    if (results.length === 0) {
+                        this.setStatusFailed('No Results');
+                        return;
+                    }
+                    if (entityIdType.value === 'is' && !flatten) {
+                        results = results[0];
+                    }
+
+                    this.sendSplit(message, results);
+                    break;
+
+                case 'array':
+                default:
+                    this.setContextValue(
+                        results,
+                        this.nodeConfig.output_location_type,
+                        this.nodeConfig.output_location,
                         message
                     );
-                    this.status({ fill: 'red', shape: 'ring', text: 'Error' });
-                });
+
+                    this.node.send(message);
+                    break;
+            }
+
+            this.setStatusSuccess();
         }
     }
 

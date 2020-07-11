@@ -1,13 +1,18 @@
-const Joi = require('joi');
+const Joi = require('@hapi/joi');
+
 const BaseNode = require('../../lib/base-node');
 
-module.exports = function(RED) {
+module.exports = function (RED) {
     const nodeOptions = {
         debug: true,
         config: {
-            template: {},
             name: {},
-            server: { isNode: true }
+            server: { isNode: true },
+            template: {},
+            resultsLocation: {},
+            resultsLocationType: {},
+            templateLocation: {},
+            templateLocationType: {},
         },
         input: {
             template: {
@@ -15,10 +20,42 @@ module.exports = function(RED) {
                 configProp: 'template',
                 validation: {
                     haltOnFail: true,
-                    schema: Joi.string().required()
-                }
-            }
-        }
+                    schema: Joi.string().required().label('template'),
+                },
+            },
+            resultsLocation: {
+                messageProp: 'resultsLocation',
+                configProp: 'resultsLocation',
+                default: 'payload',
+            },
+            resultsLocationType: {
+                messageProp: 'resultsLocationType',
+                configProp: 'resultsLocationType',
+                default: 'msg',
+                validation: {
+                    haltOnFail: true,
+                    schema: Joi.string()
+                        .valid('msg', 'flow', 'global', 'none')
+                        .label('resultsLocationType'),
+                },
+            },
+            templateLocation: {
+                messageProp: 'templateLocation',
+                configProp: 'templateLocation',
+                default: 'template',
+            },
+            templateLocationType: {
+                messageProp: 'templateLocationType',
+                configProp: 'templateLocationType',
+                default: 'msg',
+                validation: {
+                    haltOnFail: true,
+                    schema: Joi.string()
+                        .valid('msg', 'flow', 'global', 'none')
+                        .label('templateLocationType'),
+                },
+            },
+        },
     };
 
     class RenderTemplateNode extends BaseNode {
@@ -27,29 +64,43 @@ module.exports = function(RED) {
         }
 
         onInput({ parsedMessage, message }) {
-            let { template } = parsedMessage;
-            template = template.value;
+            const {
+                template,
+                templateLocation,
+                templateLocationType,
+                resultsLocation,
+                resultsLocationType,
+            } = parsedMessage;
 
-            return this.nodeConfig.server.api
-                .renderTemplate(template)
-                .then(res => {
-                    message.template = template;
-                    message.payload = res;
-                    this.send(message);
-                    this.status({
-                        fill: 'green',
-                        shape: 'dot',
-                        text: 'Success'
-                    });
-                })
-                .catch(err => {
-                    this.error(
-                        `Error calling service, home assistant api error: ${
-                            err.message
-                        }`,
+            if (this.nodeConfig.server === null) {
+                this.node.error('No valid server selected.', message);
+                return;
+            }
+
+            this.setStatusSending('Requesting');
+
+            return this.httpClient
+                .renderTemplate(template.value)
+                .then((res) => {
+                    this.setContextValue(
+                        template.value,
+                        templateLocationType.value,
+                        templateLocation.value,
                         message
                     );
-                    this.status({ fill: 'red', shape: 'ring', text: 'Error' });
+                    this.setContextValue(
+                        res,
+                        resultsLocationType.value,
+                        resultsLocation.value,
+                        message
+                    );
+
+                    this.node.send(message);
+                    this.setStatusSuccess();
+                })
+                .catch((err) => {
+                    this.error(`Error get-template: ${err.message}`, message);
+                    this.setStatusFailed('Error');
                 });
         }
     }
