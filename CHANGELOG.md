@@ -2,6 +2,53 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.27.5](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.27.4...v0.27.5) (2020-11-19)
+
+
+### Bug Fixes
+
+* **current-state:** Check the conditional before modify the message ([8154bbd](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/8154bbd765469453b6b540d572dec82ccac25fd8)), closes [#287](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/287)
+
+
+### Documentation
+
+* Correct REST and Websocket API links ([#280](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/280)) ([cf9d858](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/cf9d858ed0e4fd8ecb895d579e4c7b0fdf82a100))
+* Fix cookbook link ([53cc484](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/53cc48457598f318f31eb80cc0873eeafe6e84f5))
+
+### [0.27.4](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.27.3...v0.27.4) (2020-10-11)
+
+
+### Bug Fixes
+
+* **events-state:** fix logic when checking for valid event ([b6118a5](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/b6118a5ca91dcdcf310e95af22627b6c24ef87f6))
+
+### [0.27.3](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.27.2...v0.27.3) (2020-10-11)
+
+
+### Bug Fixes
+
+* **events-state:** reset timer active flag when condition is false ([d119307](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/d119307618e27d3d7044601a3614d678bf51b88b))
+
+### [0.27.2](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.27.1...v0.27.2) (2020-10-11)
+
+
+### Bug Fixes
+
+* **events-state:** Don't reset for timer if state changes but condition is still true ([2735eb2](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/2735eb2d3766726b6f68e765f6e4425e60098a09)), closes [#277](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/277)
+
+
+### Documentation
+
+* **events-state:** Change some wording ([711f334](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/711f334b00879125b24808311c3fe22ac5724b52))
+
+### [0.27.1](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.27.0...v0.27.1) (2020-10-06)
+
+
+### Bug Fixes
+
+* **event-state:** Pass the correct level of the event to msg.data ([4676c08](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/4676c08c808bca1aebff0049fa7577dbcafca9bc))
+* **event-state:** Use the correct clear for setTimeout ([db39c3d](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/db39c3df95bca1dcbc12cec103899f40c552e2b0))
+
 ## [0.27.0](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.26.1...v0.27.0) (2020-10-06)
 
 

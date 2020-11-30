@@ -59,37 +59,19 @@ module.exports = function (RED) {
             }
         }
 
-        async onHaEventsStateChanged(evt, runAll) {
-            const config = this.nodeConfig;
+        onHaEventsStateChanged(evt, runAll) {
             if (
                 this.isEnabled === false ||
                 !this.isHomeAssistantRunning ||
-                !shouldIncludeEvent(
-                    evt.entity_id,
-                    this.nodeConfig.entityidfilter,
-                    this.nodeConfig.entityidfiltertype
-                )
+                !this.isEventValid(evt)
             ) {
                 return;
             }
 
+            const config = this.nodeConfig;
             const eventMessage = cloneDeep(evt);
             const oldState = selectn('event.old_state', eventMessage);
             const newState = selectn('event.new_state', eventMessage);
-
-            if (
-                (config.ignorePrevStateNull && !oldState) ||
-                (config.ignorePrevStateUnknown &&
-                    oldState.state === 'unknown') ||
-                (config.ignorePrevStateUnavailable &&
-                    oldState.state === 'unavailable') ||
-                (config.ignoreCurrentStateUnknown &&
-                    newState.state === 'unknown') ||
-                (config.ignoreCurrentStateUnavailable &&
-                    newState.state === 'unavailable')
-            ) {
-                return;
-            }
 
             // Convert and save original state if needed
             this.castState(oldState, config.state_type);
@@ -106,7 +88,7 @@ module.exports = function (RED) {
             }
 
             // Get if state condition
-            const isIfState = await this.getComparatorResult(
+            const isIfState = this.getComparatorResult(
                 config.halt_if_compare,
                 config.haltIfState,
                 newState.state,
@@ -131,11 +113,24 @@ module.exports = function (RED) {
             }
             const validTimer = timer > 0;
 
-            // If if state is not used and prev and current state is the same return because  timer should already be running
-            if (validTimer && oldState.state === newState.state) return;
+            if (validTimer) {
+                if (
+                    // If if state is not used and prev and current state is the same return because  timer should already be running
+                    oldState.state === newState.state ||
+                    // Don't run timers for on connect updates
+                    runAll ||
+                    // Timer already active and ifState is still true turn don't update
+                    (config.haltIfState &&
+                        isIfState &&
+                        this.topics[eventMessage.entity_id].active)
+                ) {
+                    return;
+                }
 
-            // Don't run timers for on connect updates
-            if (validTimer && runAll) return;
+                if (config.haltIfState && !isIfState) {
+                    this.topics[eventMessage.entity_id].active = false;
+                }
+            }
 
             if (
                 !validTimer ||
@@ -159,7 +154,8 @@ module.exports = function (RED) {
                 text: statusText,
             });
 
-            clearInterval(this.topics[eventMessage.entity_id].id);
+            clearTimeout(this.topics[eventMessage.entity_id].id);
+            this.topics[eventMessage.entity_id].active = true;
             this.topics[eventMessage.entity_id].id = setTimeout(
                 this.output.bind(this, eventMessage, isIfState),
                 timeout
@@ -207,7 +203,7 @@ module.exports = function (RED) {
             const msg = {
                 topic: eventMessage.entity_id,
                 payload: eventMessage.event.new_state.state,
-                data: eventMessage,
+                data: eventMessage.event,
             };
 
             eventMessage.event.new_state.timeSinceChangedMs =
@@ -220,7 +216,7 @@ module.exports = function (RED) {
                     : ''
             }`;
 
-            clearInterval(this.topics[eventMessage.entity_id].id);
+            clearTimeout(this.topics[eventMessage.entity_id].id);
 
             // Handle version 0 'halt if' outputs. The output were reversed true
             // was sent to the second output and false was the first output
@@ -257,8 +253,8 @@ module.exports = function (RED) {
             this.onHaEventsStateChanged(eventMessage, false);
         }
 
-        async onDeploy() {
-            const entities = await this.nodeConfig.server.homeAssistant.getStates();
+        onDeploy() {
+            const entities = this.nodeConfig.server.homeAssistant.getStates();
             this.onStatesLoaded(entities);
         }
 
@@ -278,6 +274,29 @@ module.exports = function (RED) {
 
                 this.onHaEventsStateChanged(eventMessage, true);
             }
+        }
+
+        isEventValid(evt) {
+            if (
+                !shouldIncludeEvent(
+                    evt.entity_id,
+                    this.nodeConfig.entityidfilter,
+                    this.nodeConfig.entityidfiltertype
+                ) ||
+                (this.nodeConfig.ignorePrevStateNull && !evt.event.old_state) ||
+                (this.nodeConfig.ignorePrevStateUnknown &&
+                    evt.event.old_state.state === 'unknown') ||
+                (this.nodeConfig.ignorePrevStateUnavailable &&
+                    evt.event.old_state.state === 'unavailable') ||
+                (this.nodeConfig.ignoreCurrentStateUnknown &&
+                    evt.event.new_state.state === 'unknown') ||
+                (this.nodeConfig.ignoreCurrentStateUnavailable &&
+                    evt.event.new_state.state === 'unavailable')
+            ) {
+                return false;
+            }
+
+            return true;
         }
     }
 

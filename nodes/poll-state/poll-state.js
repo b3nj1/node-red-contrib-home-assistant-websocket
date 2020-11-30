@@ -75,12 +75,12 @@ module.exports = function (RED) {
             }
         }
 
-        async onTimer(triggered = false) {
+        onTimer(triggered = false) {
             if (!this.isHomeAssistantRunning || this.isEnabled === false) {
                 return;
             }
 
-            const pollState = await this.nodeConfig.server.homeAssistant.getStates(
+            const pollState = this.nodeConfig.server.homeAssistant.getStates(
                 this.nodeConfig.entity_id
             );
             if (!pollState) {
@@ -108,13 +108,7 @@ module.exports = function (RED) {
             pollState.timeSinceChangedMs = Date.now() - dateChanged.getTime();
 
             // Convert and save original state if needed
-            if (this.nodeConfig.state_type !== 'str') {
-                pollState.original_state = pollState.state;
-                pollState.state = this.getCastValue(
-                    this.nodeConfig.state_type,
-                    pollState.state
-                );
-            }
+            this.castState(pollState, this.nodeConfig.state_type);
 
             const msg = {
                 topic: this.nodeConfig.entity_id,
@@ -124,7 +118,7 @@ module.exports = function (RED) {
 
             let isIfState;
             try {
-                isIfState = await this.getComparatorResult(
+                isIfState = this.getComparatorResult(
                     this.nodeConfig.halt_if_compare,
                     this.nodeConfig.halt_if,
                     pollState.state,
