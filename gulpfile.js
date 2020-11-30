@@ -62,6 +62,7 @@ const nodeMap = {
     'trigger-state': { doc: 'trigger-state', type: 'trigger-state' },
     'wait-until': { doc: 'wait-until', type: 'ha-wait-until' },
     webhook: { doc: 'webhook', type: 'ha-webhook' },
+    zone: { doc: 'zone', type: 'ha-zone' },
 };
 
 let nodemonInstance;
@@ -253,7 +254,7 @@ task('buildEditorFiles', (done) => {
     const tasks = folders.map((folder) => {
         currentFolder = folder;
         return src([
-            'lib/common/*',
+            'lib/ui/*',
             `nodes/${folder}/ui-*.js`,
             `nodes/${folder}/ui-*.html`,
             `docs/node/${nodeMap[folder].doc}.md`,

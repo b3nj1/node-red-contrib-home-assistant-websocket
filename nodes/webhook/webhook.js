@@ -1,6 +1,8 @@
-module.exports = function (RED) {
-    const EventsNode = require('../../lib/events-node');
+const EventsNode = require('../../lib/events-node');
 
+const { INTEGRATION_UNLOADED } = require('../../lib/const');
+
+module.exports = function (RED) {
     const nodeOptions = {
         config: {
             name: {},
@@ -59,7 +61,7 @@ module.exports = function (RED) {
         onHaIntegration(type) {
             super.onHaIntegration(type);
 
-            if (type === 'unloaded') {
+            if (type === INTEGRATION_UNLOADED) {
                 if (this.removeWebhook) {
                     this.removeWebhook();
                     this.removeWebhook = null;
@@ -83,6 +85,7 @@ module.exports = function (RED) {
             }
 
             if (!this.removeWebhook) {
+                this.debug(`Adding webhook to HA`);
                 this.removeWebhook = await this.websocketClient.client.subscribeMessage(
                     this.onEvent.bind(this),
                     {
@@ -90,7 +93,8 @@ module.exports = function (RED) {
                         webhook_id: this.nodeConfig.webhookId,
                         name: this.id,
                         server_id: this.nodeConfig.server.id,
-                    }
+                    },
+                    { resubscribe: false }
                 );
             }
             this.setStatusSuccess('Registered');
@@ -101,6 +105,7 @@ module.exports = function (RED) {
             super.onClose(removed);
 
             if (this.registered && this.isConnected && this.removeWebhook) {
+                this.debug('Removing webhook from HA');
                 this.removeWebhook().catch(() => {});
             }
         }

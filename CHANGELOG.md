@@ -1,6 +1,91 @@
-# Change Log
+# Changelog
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
+
+## [0.27.0](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.26.1...v0.27.0) (2020-10-06)
+
+
+### Features
+
+* **event-state:** Add predefined ignore event types ([d70ba6f](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/d70ba6f539e019db8b7ccee418347277eec6844e))
+* **events-state:** Add for condition ([61021a8](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/61021a80aad0d47af7e51b9694e2e7630e0ee2f6))
+* **zone:** Add enter or leave event type ([735437b](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/735437bac400c94ec404ee1083a7266dba3978ed))
+
+
+### Bug Fixes
+
+* **event-state:** Add default for unit ([1d66aca](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/1d66aca75de249717419494c909074f779bfa749))
+* revert change to ignore state_changed with prev state was null ([4503856](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/4503856fb64975721e2cf40c6202ebc1a4f632e8)), closes [#271](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/271)
+
+### [0.26.1](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.26.0...v0.26.1) (2020-09-27)
+
+
+### Bug Fixes
+
+* **trigger-state:** fix autocomplete for entity id field ([6ce5d0d](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/6ce5d0dc0b998659aeb13bece30c1cf4ffa80400))
+
+## [0.26.0](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.25.1...v0.26.0) (2020-09-27)
+
+
+### Features
+
+* **trigger-state:** conditions and custom outputs editable ([358c909](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/358c909363d801698e7a8cd2c83c416c84485beb)), closes [#221](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/221)
+* **zone:** add ability to expose to HA ([a35a571](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/a35a5719977441e387fda6ef5149015646223410))
+* Add zone node ([3ac9cf4](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/3ac9cf4c498057547d6c06f12f511b7d3e775680))
+
+
+### Bug Fixes
+
+* **zone:** update autocomplete source after new data received ([a6d6c29](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/a6d6c2968ab435a9c808679292952053cc01bd1e))
+* fix conditional for null old_state ([ac9158e](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/ac9158e8241b934d91371199c8c81241cf11cf09))
+* ignore state_changed event if old_state is null ([6f0a8b5](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/6f0a8b5d1f40b68f37b3ff1ea7651949c137049e)), closes [#266](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/266)
+
+### [0.25.1](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.25.0...v0.25.1) (2020-09-12)
+
+
+### Bug Fixes
+
+* check isHomeAssistantRunning for output on connect ([64d1b45](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/64d1b45127819df31e5ffef314ef6a0f7125b8f5)), closes [#262](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/262)
+* stop enabling trigger-state node on connection to HA ([cba1aad](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/cba1aadbbe3474a001e4787cf85fabde91ebd3ec)), closes [#261](https://www.github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/261)
+
+## [0.25.0](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.24.1...v0.25.0) (2020-08-29)
+
+### Bug Fixes
+
+- **events-state:** Waiit until HA is running before outputting ([3e62ab7](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/3e62ab7c6c042149b9153657cae92523a35f2002)), closes [#248](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/248)
+
+### Documentation
+
+- Add another example to using datetime entities to trigger flows ([e6ca74e](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/e6ca74ea3050ed894d191c8e410af31ea9da887a))
+- Add Using date and time entities to trigger flows ([2b5f228](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/2b5f2284f336ce5634412896f78a83a36a3b7f50))
+
+### [0.24.1](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.24.0...v0.24.1) (2020-08-08)
+
+### Bug Fixes
+
+- **wait-until:** Use the rendered template on event check ([5721ebb](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/5721ebbe4182f4c12839282252e3065ad6c362f4)), closes [#259](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/259)
+
+## [0.24.0](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.23.0...v0.24.0) (2020-08-04)
+
+### Features
+
+- **events-all:** Add option to output events before HA state = running ([3f2e6ec](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/3f2e6ec6c858a9e1148f8df1b37ae05ee651a25f))
+
+## [0.23.0](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.22.6...v0.23.0) (2020-08-02)
+
+### Features
+
+- Add extra data to the events:all output ([4212cac](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/4212cac8e86ca6ddfe9a30d90b46b5e2828367a2)), closes [#229](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/229)
+
+### Bug Fixes
+
+- Handle resubscribing after a disconnect ([93d396c](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/93d396cc4eca828b3d512db3f35e5586023311cc)), closes [#250](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/250)
+- **trigger-state:** Only update HA when integration is loaded ([1c187a5](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/1c187a5f78cc658550248ac4a832c90be73a904f)), closes [#256](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/issues/256)
+- wait until NR integration is loaded ([42b02cb](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/42b02cb1c9139f365442bbbaa761aa7a0149d26c))
+
+### Documentation
+
+- add documentation for events: all changes ([6078302](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/commit/6078302a08c93b60e3791e5ceac317f93c116101))
 
 ## [0.22.6](https://github.com/zachowj/node-red-contrib-home-assistant-websocket/compare/v0.22.5...v0.22.6) (2020-06-25)
 

@@ -16,12 +16,6 @@
     }
 }
 
-#error-if-state {
-    text-align: center;
-    padding: 5px;
-    margin-top: 5px;
-}
-
 .form-row {
     &.checkbox-option {
         input {
@@ -50,6 +44,27 @@
             margin-right: 20px;
         }
     }
+}
+
+.editable-list-row {
+    margin-bottom: 4px;
+}
+
+#constraint-list {
+    min-width: 446px;
+
+    input {
+        width: 65%;
+    }
+}
+
+#output-list input {
+    width: 62%;
+}
+
+#clearIfState {
+    position: absolute;
+    margin-left: 2px;
 }
 
 .ha-node-label-legacy {
