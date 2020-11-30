@@ -99,6 +99,7 @@ module.exports = function (RED) {
             if (
                 runAll === undefined &&
                 config.output_only_on_state_change === true &&
+                oldState &&
                 oldState.state === newState.state
             ) {
                 return;
