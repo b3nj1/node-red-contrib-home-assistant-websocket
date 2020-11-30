@@ -81,6 +81,7 @@ module.exports = function (RED) {
             if (
                 runAll === undefined &&
                 config.output_only_on_state_change === true &&
+                oldState &&
                 oldState.state === newState.state
             ) {
                 return;
@@ -115,7 +116,7 @@ module.exports = function (RED) {
             if (validTimer) {
                 if (
                     // If if state is not used and prev and current state is the same return because  timer should already be running
-                    oldState.state === newState.state ||
+                    oldState && oldState.state === newState.state ||
                     // Don't run timers for on connect updates
                     runAll ||
                     // Timer already active and ifState is still true turn don't update
